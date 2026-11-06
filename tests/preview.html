@@ -1,0 +1,91 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Projects plugin preview</title>
+<style>
+  :root { color-scheme: light dark; --bg: light-dark(#fff, #1b1b1f); --fg: light-dark(#1d1d20, #ececf0); }
+  html, body, #root { height: 100%; margin: 0; }
+  body { background: var(--bg); color: var(--fg); font: 14px/1.45 -apple-system, BlinkMacSystemFont, sans-serif; }
+  h1 { font-size: 22px; font-weight: 600; }
+  .ui-card { border-radius: 12px; background: light-dark(#f6f6f8, #26262b); }
+</style>
+</head>
+<body>
+<div id="root"></div>
+<script type="module">
+import React from "https://esm.sh/react@18.3.1";
+import { createRoot } from "https://esm.sh/react-dom@18.3.1/client?deps=react@18.3.1";
+const { apply } = await import(`../plugin.js?${Date.now()}`);
+
+const params = new URLSearchParams(location.search);
+const DELAY = Number(params.get("delay") ?? 900);
+const OWNER = "a".repeat(64);
+const wait = (ms, signal) => new Promise((resolve, reject) => {
+  const timer = setTimeout(resolve, ms);
+  signal?.addEventListener("abort", () => { clearTimeout(timer); reject(new DOMException("Aborted", "AbortError")); });
+});
+const event = (kind, tags, n) => ({ kind, tags, pubkey: OWNER, created_at: 1000 + n, content: "", id: `${kind}-${n}` });
+const repo = (d, name, description, channel) => event(30617, [["d", d], ["name", name], ["description", description], ...(channel ? [["buzz-channel", channel]] : [])], d.length);
+const project = (d, name, description, repos, channel) => event(30621, [["d", d], ["name", name], ["description", description], ...(channel ? [["buzz-channel", channel]] : []), ...repos.map((r) => ["a", `30617:${OWNER}:${r}`])], d.length);
+const repos = [
+  repo("web-app", "web-app", "Customer-facing web application with a very long description that keeps going so we can see how it behaves when there is not enough room in the row", "c1"),
+  repo("api", "api", "Backend API", "c2"),
+  repo("mobile", "mobile", "iOS and Android clients"),
+  repo("infra", "infra", "Terraform and deploy scripts", "c3"),
+  repo("broken", "broken-repo", "Always fails to load"),
+  repo("empty", "empty-repo", ""),
+  repo("scratch", "scratch-notes", "Loose notes"),
+  repo("private-tools", "private-tools", "Linked channel you have not joined", "c9"),
+];
+const projects = [
+  project("platform", "Platform", "Everything customers touch", ["web-app", "api", "mobile"], "c0"),
+  project("ops", "Operations", "", ["infra", "broken", "missing-repo"]),
+  project("empty-project", "Empty project", "No repositories yet", []),
+];
+const dirs = ["src", "src/components", "src/components/forms", "src/lib", "src/pages", "src/pages/account", "docs", "docs/guides", "scripts", ".github/workflows", "public/images"];
+const files = [
+  { path: "README.md", size: 2300 }, { path: "package.json", size: 900 }, { path: ".gitignore", size: 80 }, { path: "LICENSE", size: 11000 }, { path: "tsconfig.json", size: 420 },
+  { path: "public/images/logo.png", size: 48000 },
+  { path: "src/an-extremely-long-file-name-that-should-not-break-the-layout-of-the-page-even-on-a-narrow-window.tsx", size: 1300 },
+  ...dirs.flatMap((dir, i) => Array.from({ length: 4 + i }, (_, n) => ({ path: `${dir}/module-${n + 1}.${dir.startsWith("docs") ? "md" : "ts"}`, size: 300 + n * 811 }))),
+].map((f, i) => ({ ...f, hash: String(i) }));
+const source = Array.from({ length: 140 }, (_, i) => i % 9 === 0 ? `export function step${i}(input: string) {` : i % 9 === 8 ? "}" : `  const value${i} = input.trim().toLowerCase(); // keep this line long enough to check how horizontal scrolling behaves in the viewer`).join("\n") + "\n";
+const readme = "# web-app\n\nThe customer-facing application.\n\n## Getting started\n\n1. Install dependencies with `pnpm install`.\n2. Run `pnpm dev`.\n\n## Docs\n\nSee **docs/guides** and the [wiki](https://example.com).\n\n```sh\npnpm test\n```\n";
+const commits = Array.from({ length: 40 }, (_, i) => ({ hash: (i + 1).toString(16).padStart(40, "c"), author: i % 3 ? "Sam Rivera" : "Ada Chen", date: 1793900000 - i * 86400 * 1.7 | 0, subject: i === 2 ? "A really long commit subject that explains in far too much detail what changed and why it mattered to everybody involved" : `Update module ${i + 1}` }));
+const diff = "commit abc\nAuthor: Ada Chen\n\n    Update module\n\ndiff --git a/src/lib/module-1.ts b/src/lib/module-1.ts\n--- a/src/lib/module-1.ts\n+++ b/src/lib/module-1.ts\n@@ -1,4 +1,5 @@\n export function run() {\n-  return old();\n+  const value = next();\n+  return value;\n }\n";
+
+const session = {
+  async read(filters) {
+    await wait(250);
+    const kind = filters[0].kinds[0];
+    return kind === 30621 ? projects : kind === 30617 ? repos : [];
+  },
+  channels: {
+    ensureList() {}, subscribeList: () => () => {},
+    list: (() => { const list = { status: "ready", channels: [{ id: "c0", name: "platform" }, { id: "c1", name: "web-app-dev" }, { id: "c2", name: "api-dev" }, { id: "c3", name: "ops" }] }; return () => list; })(),
+  },
+  projectGit: {
+    async read(input, signal) {
+      await wait(DELAY, signal);
+      if (input.dtag === "broken") throw Object.assign(new Error("x"), { status: 503, kind: "unavailable" });
+      if (input.dtag === "empty") return { head: null, commits: [], files: [], readme: null, file: null, diff: null };
+      const file = input.path ? { path: input.path, size: 4000, content: input.path.endsWith(".png") ? null : input.path === "README.md" ? readme : source } : null;
+      return { head: "c".repeat(40), commits, files, readme, file, diff: input.commit ? diff : null };
+    },
+  },
+};
+const connection = { status: "ready", origin: "https://relay.example.com", viewer: OWNER, scope: "preview", generation: 1, session };
+window.__opened = [];
+const pages = [];
+apply({
+  react: React,
+  relay: { subscribe: () => () => {}, snapshot: () => connection },
+  pages: { register: (page) => pages.push(page) },
+  navigation: { open: (target) => window.__opened.push(target) },
+});
+createRoot(document.getElementById("root")).render(React.createElement(pages[0].component));
+</script>
+</body>
+</html>
