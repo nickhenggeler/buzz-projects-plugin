@@ -57,7 +57,9 @@ const conn={status:"ready",origin:"https://relay.example.com",viewer:O,scope:"s"
  projectGit:{read:async(i,sig)=>{reads.push(i);ok(sig&&"aborted"in sig,"signal");if(failNext-->0)throw Object.assign(new Error("x"),{status:503});return snap(i)}}}};
 if(typeof AbortController==="undefined")globalThis.AbortController=class{constructor(){this.signal={aborted:false}}abort(){this.signal.aborted=true}};
 const reg=[],opened=[];
-apply({react:React,relay:{subscribe(){return()=>{}},snapshot:()=>conn},pages:{register:p=>reg.push(p)},navigation:{open:t=>opened.push(t)}});
+const panelsReg=[];
+apply({react:React,relay:{subscribe(){return()=>{}},snapshot:()=>conn},pages:{register:p=>reg.push(p)},panels:{register:p=>panelsReg.push(p)},navigation:{open:t=>opened.push(t)}});
+eq(panelsReg[0].channelPlacement,"tab","panel sits beside the conversation"); ok(panelsReg[0].launcher.target&&panelsReg[0].channelLauncher,"both launchers"); eq(panelsReg[0].matches("https://example.com"),false,"panel claims no links");
 async function frame(){let o;for(let i=0;i<8;i++){pending=[];o={text:[],buttons:[],inputs:[]};walk({type:reg[0].component,props:{},kids:[]},"root",o);const p=pending;p.forEach(f=>f());await new Promise(r=>r());await new Promise(r=>r());await new Promise(r=>r());}return o}
 const click=async(o,t)=>{const b=o.buttons.find(b=>label(b).includes(t));if(!b)throw new Error("no button "+t+" in "+o.buttons.map(label));b.props.onClick();return frame()};
 const has=(o,t)=>o.text.join(" ").includes(t);
@@ -76,6 +78,6 @@ o.inputs[0].props.onChange({target:{value:"view"}}); o=await frame(); ok(has(o,"
 o.inputs[0].props.onChange({target:{value:""}}); o=await frame();
 o=await click(o,"Commits"); ok(has(o,"fix thing"),"commits"); o=await click(o,"fix thing"); ok(has(o,"+added")&&has(o,"-removed")&&has(o,"file changed"),"diff");
 o=await click(o,"← Commits"); o=await click(o,"Issues"); eq(opened[0].route.params,{type:"repo",owner:O,dtag:"demo",tab:"issues"},"issues link");
-const r3=reads.length; o=await click(o,"Refresh"); ok(reads.length>r3,"refresh re-reads");
+const r3=reads.length; o=await click(o,"↻"); ok(reads.length>r3,"refresh re-reads");
 o=await click(o,"← Projects"); ok(has(o,"Core")&&has(o,"Recently opened"),"back with recents");
 print("PASS",n,"checks");

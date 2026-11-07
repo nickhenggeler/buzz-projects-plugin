@@ -495,6 +495,7 @@ export const nextRecent = (recent, address, limit = 4) =>
 const ICON =
   '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="#888" stroke-width="2" stroke-linejoin="round"><path d="M3 6h6l2 2h10v11H3z"/></svg>';
 const DIFF_LINE_LIMIT = 4000;
+const PANEL_TARGET = "sprig-projects:browse";
 const WIDE_LAYOUT = 760;
 const SLOW_AFTER_MS = 4000;
 
@@ -511,6 +512,10 @@ const CSS = `
 .sp-scroll { height: 100%; width: 100%; overflow-y: auto; scrollbar-gutter: stable; }
 .sp-page { padding: 20px clamp(14px, 4vw, 32px) 48px; margin: 0 auto; width: 100%; max-width: 920px; }
 .sp-page.sp-wide { max-width: 1320px; }
+.sp-compact .sp-page { padding: 10px 12px 24px; }
+.sp-compact .sp-header { gap: 6px; margin-bottom: 8px; }
+.sp-compact .sp-header h1 { font-size: 15px; }
+.sp-compact .sp-card-body, .sp-compact .sp-card-head { padding: 0 6px; }
 .sp-header { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-bottom: 14px; }
 .sp-header h1 { margin: 0; font-size: 20px; line-height: 1.3; min-width: 0; overflow-wrap: anywhere; }
 .sp-header h1.sp-grow { flex: 1 1 140px; }
@@ -599,6 +604,18 @@ export function apply(ctx) {
   const React = ctx.react;
   const h = React.createElement;
   const useMeasure = React.useLayoutEffect || React.useEffect;
+  // Shared by the page and the side panel, so switching keeps your place.
+  const memories = new Map();
+  const memoryFor = (key) => {
+    if (!memories.has(key))
+      memories.set(key, {
+        cache: new Map(),
+        views: new Map(),
+        repo: null,
+        scrollTop: 0,
+      });
+    return memories.get(key);
+  };
 
   function useConnection() {
     return React.useSyncExternalStore(ctx.relay.subscribe, ctx.relay.snapshot);
@@ -848,13 +865,13 @@ export function apply(ctx) {
     );
   }
 
-  function FileSearch({ files, query, setQuery, openFile }) {
+  function FileSearch({ files, query, setQuery, openFile, globalKeys }) {
     const input = React.useRef(null);
     const [active, setActive] = React.useState(0);
     const results = React.useMemo(() => searchFiles(files, query), [files, query]);
     React.useEffect(() => setActive(0), [query]);
     React.useEffect(() => {
-      if (typeof document === "undefined") return undefined;
+      if (!globalKeys || typeof document === "undefined") return undefined;
       const onKey = (event) => {
         const typing = /^(INPUT|TEXTAREA|SELECT)$/.test(event.target.tagName || "");
         if (event.key === "/" && !typing && !event.target.isContentEditable) {
@@ -864,7 +881,7 @@ export function apply(ctx) {
       };
       document.addEventListener("keydown", onKey);
       return () => document.removeEventListener("keydown", onKey);
-    }, []);
+    }, [globalKeys]);
     const onKeyDown = (event) => {
       if (event.key === "Escape") setQuery("");
       else if (event.key === "ArrowDown") {
@@ -885,7 +902,7 @@ export function apply(ctx) {
         ref: input,
         className: "sp-input",
         type: "search",
-        placeholder: "Go to file  ( / )",
+        placeholder: globalKeys ? "Go to file  ( / )" : "Go to file",
         "aria-label": "Go to file",
         value: query,
         onChange: (event) => setQuery(event.target.value),
@@ -1129,7 +1146,7 @@ export function apply(ctx) {
     );
   }
 
-  function FilesPane({ session, cache, repo, snapshot, view, go, wide }) {
+  function FilesPane({ session, cache, repo, snapshot, view, go, wide, globalKeys }) {
     const [query, setQuery] = React.useState("");
     const expanded = React.useMemo(
       () => new Set(view.expanded || []),
@@ -1164,6 +1181,7 @@ export function apply(ctx) {
       query,
       setQuery,
       openFile,
+      globalKeys,
     });
     const searching = query.trim().length > 0;
     const showTree = wide && !view.hideTree;
@@ -1373,7 +1391,7 @@ export function apply(ctx) {
     );
   }
 
-  function RepoBrowser({ session, cache, views, repo, scope, back }) {
+  function RepoBrowser({ session, cache, views, repo, scope, back, compact }) {
     const [ref, width] = useWidth();
     const wide = width >= WIDE_LAYOUT;
     const [view, setView] = React.useState(
@@ -1446,6 +1464,7 @@ export function apply(ctx) {
         view,
         go,
         wide,
+        globalKeys: !compact,
       });
     const home = view.tab === "files" && !view.dir && !view.file;
     return h(
@@ -1467,9 +1486,19 @@ export function apply(ctx) {
               title: cloneUrl(repo, scope.communityOrigin),
               onClick: () => copy(cloneUrl(repo, scope.communityOrigin)),
             },
-            copied ? "Copied" : wide ? "Copy clone URL" : "Clone URL",
+            copied ? "Copied" : wide ? "Copy clone URL" : "Clone",
           ),
-          h("button", { type: "button", className: "sp-btn", onClick: refresh }, "Refresh"),
+          h(
+            "button",
+            {
+              type: "button",
+              className: "sp-btn",
+              "aria-label": "Refresh",
+              title: "Refresh",
+              onClick: refresh,
+            },
+            wide ? "Refresh" : "↻",
+          ),
         ),
         home && repo.description
           ? h(
@@ -1546,17 +1575,19 @@ export function apply(ctx) {
     );
   }
 
-  function ProjectsFeature({ session, scope }) {
+  function ProjectsFeature({ session, scope, memory, compact, channel }) {
     const [state, setState] = React.useState({ status: "loading" });
     const [query, setQuery] = React.useState("");
     const [attempt, setAttempt] = React.useState(0);
-    const [repo, setRepo] = React.useState(null);
+    const [repo, setRepoState] = React.useState(memory.repo);
+    const setRepo = (next) => {
+      memory.repo = next;
+      setRepoState(next);
+    };
     const recentKey = `sprig.projects.recent:${scope.communityOrigin}:${scope.viewer}`;
     const [recent, setRecent] = React.useState(() => readRecent(recentKey));
-    const cache = React.useRef(new Map()).current;
-    const views = React.useRef(new Map()).current;
+    const { cache, views } = memory;
     const scroller = React.useRef(null);
-    const scrollTop = React.useRef(0);
     const channels = useChannels(session);
 
     React.useEffect(() => {
@@ -1577,7 +1608,7 @@ export function apply(ctx) {
     }, [session, attempt]);
 
     useMeasure(() => {
-      if (!repo && scroller.current) scroller.current.scrollTop = scrollTop.current;
+      if (!repo && scroller.current) scroller.current.scrollTop = memory.scrollTop;
     }, [repo]);
 
     const names = React.useMemo(
@@ -1585,7 +1616,7 @@ export function apply(ctx) {
       [channels],
     );
     const openRepo = (next) => {
-      if (scroller.current) scrollTop.current = scroller.current.scrollTop;
+      if (scroller.current) memory.scrollTop = scroller.current.scrollTop;
       const updated = nextRecent(recent, next.address);
       setRecent(updated);
       writeRecent(recentKey, updated);
@@ -1607,6 +1638,7 @@ export function apply(ctx) {
         views,
         repo,
         scope,
+        compact,
         back: () => setRepo(null),
       });
 
@@ -1657,6 +1689,9 @@ export function apply(ctx) {
     const everyRepo = [...all.projects.flatMap((p) => p.repos), ...all.unassigned];
     const byAddress = new Map(everyRepo.map((item) => [item.address, item]));
     const recentRepos = recent.map((item) => byAddress.get(item)).filter(Boolean);
+    const channelRepos = channel
+      ? [...byAddress.values()].filter((item) => item.channelId === channel.channelId)
+      : [];
     const total = byAddress.size;
     const model = filterModel(all, query);
     const empty = !model.projects.length && !model.unassigned.length;
@@ -1681,6 +1716,20 @@ export function apply(ctx) {
             "p",
             { className: "sp-muted", style: { marginBottom: 10 } },
             `Showing the first ${READ_LIMIT} records; some may be missing.`,
+          )
+        : null,
+      !query.trim() && channelRepos.length
+        ? h(
+            "section",
+            { "aria-label": "In this channel" },
+            h("h2", { className: "sp-section", style: { marginTop: 0 } }, `In #${channel.channelName}`),
+            h(
+              "div",
+              { className: "ui-card sp-card", style: { paddingTop: 8 } },
+              channelRepos.map((item) =>
+                h(RepoRow, { key: item.address, repo: item, openRepo }),
+              ),
+            ),
           )
         : null,
       !query.trim() && recentRepos.length
@@ -1771,18 +1820,21 @@ export function apply(ctx) {
     );
   }
 
-  function ProjectsPage() {
+  function Surface({ compact, channel }) {
     const connection = useConnection();
     const ready =
       connection.status === "ready" && connection.origin && connection.viewer;
     return h(
       "div",
-      { "data-sprig-projects": "" },
+      { "data-sprig-projects": "", className: compact ? "sp-compact" : undefined },
       h("style", null, CSS),
       ready
         ? h(ProjectsFeature, {
             key: `${connection.scope}:${connection.generation}`,
             session: connection.session,
+            memory: memoryFor(connection.scope),
+            compact,
+            channel,
             scope: {
               viewer: connection.viewer,
               communityOrigin: connection.origin,
@@ -1796,14 +1848,71 @@ export function apply(ctx) {
     );
   }
 
+  const ProjectsPage = () => h(Surface, { compact: false });
+  const ProjectsPanel = ({ channelContext }) =>
+    h(Surface, { compact: true, channel: channelContext });
+
+  function ChannelButton({ toggle, pressed }) {
+    return h(
+      "button",
+      {
+        type: "button",
+        "aria-label": "Toggle Projects",
+        "aria-expanded": pressed,
+        title: "Projects",
+        onClick: () => toggle(PANEL_TARGET),
+        style: {
+          display: "inline-flex",
+          alignItems: "center",
+          justifyContent: "center",
+          width: 28,
+          height: 28,
+          padding: 0,
+          border: "none",
+          borderRadius: 6,
+          background: pressed
+            ? "color-mix(in srgb, currentColor 12%, transparent)"
+            : "transparent",
+          color: "inherit",
+          cursor: "pointer",
+        },
+      },
+      h(
+        "svg",
+        {
+          viewBox: "0 0 24 24",
+          width: 16,
+          height: 16,
+          fill: "none",
+          stroke: "currentColor",
+          strokeWidth: 2,
+          strokeLinejoin: "round",
+          "aria-hidden": true,
+        },
+        h("path", { d: "M3 6h6l2 2h10v11H3z" }),
+      ),
+    );
+  }
+
+  const icon = `data:image/svg+xml;base64,${btoa(ICON)}`;
   ctx.pages.register({
     id: "projects",
     title: "Projects",
     layout: "document",
     primary: true,
-    icon: `data:image/svg+xml;base64,${btoa(ICON)}`,
+    icon,
     component: ProjectsPage,
+  });
+  ctx.panels.register({
+    id: "projects-panel",
+    title: "Projects",
+    matches: () => false,
+    launcher: { icon, target: PANEL_TARGET },
+    channelLauncher: ChannelButton,
+    channelPlacement: "tab",
+    deferUntilShown: true,
+    component: ProjectsPanel,
   });
 }
 
-export const inject = ["react", "pages", "relay", "navigation"];
+export const inject = ["react", "pages", "panels", "relay", "navigation"];
